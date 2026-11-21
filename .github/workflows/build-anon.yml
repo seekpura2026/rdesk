@@ -116,12 +116,16 @@ jobs:
           add-to-path: true
       - uses: lukka/run-vcpkg@v11
         with:
-          vcpkgDirectory: ${{ runner.workspace }}/vcpkg/
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
       - name: vcpkg deps (3 ABI)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
+          set -x
           for abi in arm64-v8a armeabi-v7a x86_64; do
-            ./flutter/build_android_deps.sh $abi
+            ./flutter/build_android_deps.sh $abi 2>&1 | tail -30
           done
       - uses: dtolnay/rust-toolchain@v1
         with:
@@ -190,11 +194,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: lukka/run-vcpkg@v11
         with:
-          vcpkgDirectory: ${{ runner.workspace }}/vcpkg/
+          vcpkgDirectory: C:\\vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
       - name: vcpkg deps
         shell: bash
-        run: $VCPKG_ROOT/vcpkg install libvpx libyuv opus aom --triplet x64-windows-static
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          set -x
+          "$VCPKG_ROOT/vcpkg" install libvpx libyuv opus aom \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed" 2>&1 | tail -40
       - name: Build
         shell: bash
         run: python build.py --flutter
@@ -236,10 +247,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: lukka/run-vcpkg@v11
         with:
-          vcpkgDirectory: ${{ runner.workspace }}/vcpkg/
+          vcpkgDirectory: ${{ github.workspace }}/vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
       - name: vcpkg deps
-        run: $VCPKG_ROOT/vcpkg install libvpx libyuv opus aom --triplet ${{ matrix.triplet }}
+        run: |
+          set -x
+          "$VCPKG_ROOT/vcpkg" install libvpx libyuv opus aom \
+            --triplet ${{ matrix.triplet }} \
+            --x-install-root="$VCPKG_ROOT/installed" 2>&1 | tail -40
       - name: Build
         run: python3 build.py --flutter
       - name: Package DMG
