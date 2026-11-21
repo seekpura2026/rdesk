@@ -25,6 +25,9 @@ env:
   APP_NAME: "RCPT"
   LIB_NAME: "rcptcore"
 
+permissions:
+  contents: write
+
 jobs:
   # ── 生成桥接 + freezed + 去特征化补丁，产出 artifact ──
   prepare:
@@ -118,32 +121,29 @@ jobs:
         with:
           vcpkgDirectory: ${{ github.workspace }}/vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-      - name: vcpkg deps (3 ABI)
-        env:
-          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
-        run: |
-          set -x
-          for abi in arm64-v8a armeabi-v7a x86_64; do
-            ./flutter/build_android_deps.sh $abi 2>&1 | tail -30
-          done
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
-      - name: Build Rust libs
+      - name: Build Rust libs (per-ABI, deps reinstalled each round)
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
+          set -x
           cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }}
           SYS=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android21 --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/aarch64-linux-android"
-          cargo ndk -t arm64-v8a build --features flutter --release
-          export BINDGEN_EXTRA_CLANG_ARGS="--target=armv7a-linux-androideabi21 --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/arm-linux-androideabi"
-          cargo ndk -t armeabi-v7a build --features flutter --release
-          export BINDGEN_EXTRA_CLANG_ARGS="--target=x86_64-linux-android21 --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/x86_64-linux-android"
-          cargo ndk -t x86_64 build --features flutter --release
+          build_one() {
+            abi=$1; tgt=$2
+            ./flutter/build_android_deps.sh $abi 2>&1 | tail -15
+            export BINDGEN_EXTRA_CLANG_ARGS="--target=$tgt --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/$(echo $tgt | sed 's/[0-9]*$//')"
+            cargo ndk -t $abi build --features flutter --release --bin rustdesk --lib 2>&1 | tail -25
+          }
+          build_one arm64-v8a aarch64-linux-android21
+          build_one armeabi-v7a armv7a-linux-androideabi21
+          build_one x86_64 x86_64-linux-android21
+          ls -lh target/*linux-android*/release/lib*so target/*linux-androideabi/release/lib*so 2>/dev/null || true
       - name: Assemble APK
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -164,6 +164,16 @@ jobs:
         with:
           name: RCPT-android
           path: flutter/build/app/outputs/flutter-apk/*.apk
+      - name: Dump failure log
+        if: failure()
+        run: |
+          mkdir -p logs
+          echo "android job failed" > logs/android.txt
+          env | grep -E 'ANDROID_NDK|VCPKG' >> logs/android.txt || true
+          ls -R /opt/vcpkg/installed 2>/dev/null | head -50 >> logs/android.txt || true
+          git config user.email ci@local; git config user.name ci
+          git add -f logs && git commit -m "ci: android fail log [skip ci]" || true
+          git push || true
 
   # ── Windows ──
   windows:
