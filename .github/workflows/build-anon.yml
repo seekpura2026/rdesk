@@ -245,14 +245,7 @@ jobs:
       - name: Drop aom (msys2 pkgconf 404 workaround)
         shell: bash
         run: |
-          python3 -c "
-import json
-d=json.load(open('vcpkg.json'))
-deps=d.get('dependencies',[])
-d['dependencies']=[x for x in deps if not ((isinstance(x,dict) and x.get('name')=='aom') or x=='aom')]
-json.dump(d,open('vcpkg.json','w'),indent=2)
-print('aom removed, deps:',len(d['dependencies']))
-"
+          python3 -c "import json;d=json.load(open('vcpkg.json'));d['dependencies']=[x for x in d.get('dependencies',[]) if not ((isinstance(x,dict) and x.get('name')=='aom') or x=='aom')];json.dump(d,open('vcpkg.json','w'),indent=2);print('aom removed')"
       - name: vcpkg deps
         shell: bash
         env:
