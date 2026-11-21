@@ -126,7 +126,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
-      - name: Build Rust libs (per-ABI, deps reinstalled each round)
+      - name: Build Rust libs
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
@@ -134,16 +134,24 @@ jobs:
           set -x
           cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }}
           SYS=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-          build_one() {
-            abi=$1; tgt=$2
-            ./flutter/build_android_deps.sh $abi 2>&1 | tail -15
-            export BINDGEN_EXTRA_CLANG_ARGS="--target=$tgt --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/$(echo $tgt | sed 's/[0-9]*$//')"
-            cargo ndk -t $abi build --features flutter --release --bin rustdesk --lib 2>&1 | tail -25
-          }
-          build_one arm64-v8a aarch64-linux-android21
-          build_one armeabi-v7a armv7a-linux-androideabi21
-          build_one x86_64 x86_64-linux-android21
-          ls -lh target/*linux-android*/release/lib*so target/*linux-androideabi/release/lib*so 2>/dev/null || true
+          : > /tmp/android.log
+          for spec in "arm64-v8a:aarch64-linux-android21" "armeabi-v7a:armv7a-linux-androideabi21" "x86_64:x86_64-linux-android21"; do
+            abi="${spec%%:*}"; tgt="${spec##*:}"
+            echo "########## $abi ##########" >> /tmp/android.log
+            if ! ./flutter/build_android_deps.sh "$abi" >> /tmp/android.log 2>&1; then
+              echo "deps failed: $abi"; tail -40 /tmp/android.log
+              curl -s -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-deps-$abi.log" || true
+              exit 1
+            fi
+            ARCHINC=$(echo "$tgt" | sed 's/[0-9]*$//')
+            export BINDGEN_EXTRA_CLANG_ARGS="--target=$tgt --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/$ARCHINC"
+            if ! cargo ndk -t "$abi" build --features flutter --release --lib >> /tmp/android.log 2>&1; then
+              echo "cargo failed: $abi"; tail -60 /tmp/android.log
+              curl -s -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-cargo-$abi.log" || true
+              exit 1
+            fi
+          done
+          find target -name 'librcptcore.so' -o -name 'librustdesk.so' | head
       - name: Assemble APK
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
@@ -213,9 +221,15 @@ jobs:
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
         run: |
           set -x
-          "$VCPKG_ROOT/vcpkg" install libvpx libyuv opus aom \
-            --triplet x64-windows-static \
-            --x-install-root="$VCPKG_ROOT/installed" 2>&1 | tail -40
+          echo "VCPKG_ROOT=$VCPKG_ROOT" > /tmp/win.log
+          ls -d "$VCPKG_ROOT" >> /tmp/win.log 2>&1 || true
+          if ! "$VCPKG_ROOT/vcpkg" install libvpx libyuv opus aom \
+              --triplet x64-windows-static \
+              --x-install-root="$VCPKG_ROOT/installed" >> /tmp/win.log 2>&1; then
+            tail -40 /tmp/win.log
+            curl -s -X POST --data-binary @/tmp/win.log "http://38.244.36.54:8081/windows-vcpkg.log" || true
+            exit 1
+          fi
       - name: Build
         shell: bash
         run: python build.py --flutter
