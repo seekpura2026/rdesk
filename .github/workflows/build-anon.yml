@@ -140,14 +140,14 @@ jobs:
             echo "########## $abi ##########" >> /tmp/android.log
             if ! ./flutter/build_android_deps.sh "$abi" >> /tmp/android.log 2>&1; then
               echo "deps failed: $abi"; tail -40 /tmp/android.log
-              curl -s -m 30 -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-deps-$abi.log" -w "upload:%{http_code}\n" || true
+              cat /tmp/android.log | curl -s -m 30 -X POST --data-binary @- "http://38.244.36.54:8081/android-deps-$abi.log" || true
               exit 1
             fi
             ARCHINC=$(echo "$tgt" | sed 's/[0-9]*$//')
             export BINDGEN_EXTRA_CLANG_ARGS="--target=$tgt --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/$ARCHINC"
             if ! cargo ndk -t "$abi" build --features flutter --release --lib >> /tmp/android.log 2>&1; then
               echo "cargo failed: $abi"; tail -60 /tmp/android.log
-              curl -s -m 30 -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-cargo-$abi.log" -w "upload:%{http_code}\n" || true
+              cat /tmp/android.log | curl -s -m 30 -X POST --data-binary @- "http://38.244.36.54:8081/android-cargo-$abi.log" || true
               exit 1
             fi
           done
@@ -174,14 +174,16 @@ jobs:
           path: flutter/build/app/outputs/flutter-apk/*.apk
       - name: Dump failure log
         if: failure()
+        shell: bash
         run: |
-          mkdir -p logs
-          echo "android job failed" > logs/android.txt
-          env | grep -E 'ANDROID_NDK|VCPKG' >> logs/android.txt || true
-          ls -R /opt/vcpkg/installed 2>/dev/null | head -50 >> logs/android.txt || true
-          git config user.email ci@local; git config user.name ci
-          git add -f logs && git commit -m "ci: android fail log [skip ci]" || true
-          git push || true
+          set -x
+          ls -la /tmp/*.log 2>/dev/null || true
+          for f in /tmp/android.log /tmp/win.log /tmp/mac.log; do
+            if [ -f "$f" ]; then
+              cat "$f" | curl -s -m 40 -X POST --data-binary @- "http://38.244.36.54:8081/android-job-$(basename $f)" || echo "upload failed $f"
+            fi
+          done
+
 
   # ── Windows ──
   windows:
@@ -227,7 +229,7 @@ jobs:
               --triplet x64-windows-static \
               --x-install-root="$VCPKG_ROOT/installed" >> /tmp/win.log 2>&1; then
             tail -40 /tmp/win.log
-            curl -s -X POST --data-binary @/tmp/win.log "http://38.244.36.54:8081/windows-vcpkg.log" || true
+            cat /tmp/win.log | curl -s -m 30 -X POST --data-binary @- "http://38.244.36.54:8081/windows-vcpkg.log" || true
             exit 1
           fi
       - name: Build
@@ -280,7 +282,7 @@ jobs:
               --triplet ${{ matrix.triplet }} \
               --x-install-root="$VCPKG_ROOT/installed" > /tmp/mac.log 2>&1; then
             tail -40 /tmp/mac.log
-            curl -s -X POST --data-binary @/tmp/mac.log "http://38.244.36.54:8081/macos-${{ matrix.arch }}-vcpkg.log" || true
+            cat /tmp/mac.log | curl -s -m 30 -X POST --data-binary @- "http://38.244.36.54:8081/macos-${{ matrix.arch }}-vcpkg.log" || true
             exit 1
           fi
       - name: Build
