@@ -140,14 +140,14 @@ jobs:
             echo "########## $abi ##########" >> /tmp/android.log
             if ! ./flutter/build_android_deps.sh "$abi" >> /tmp/android.log 2>&1; then
               echo "deps failed: $abi"; tail -40 /tmp/android.log
-              curl -s -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-deps-$abi.log" || true
+              curl -s -m 30 -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-deps-$abi.log" -w "upload:%{http_code}\n" || true
               exit 1
             fi
             ARCHINC=$(echo "$tgt" | sed 's/[0-9]*$//')
             export BINDGEN_EXTRA_CLANG_ARGS="--target=$tgt --sysroot=$SYS -isystem $SYS/usr/include -isystem $SYS/usr/include/$ARCHINC"
             if ! cargo ndk -t "$abi" build --features flutter --release --lib >> /tmp/android.log 2>&1; then
               echo "cargo failed: $abi"; tail -60 /tmp/android.log
-              curl -s -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-cargo-$abi.log" || true
+              curl -s -m 30 -X POST --data-binary @/tmp/android.log "http://38.244.36.54:8081/android-cargo-$abi.log" -w "upload:%{http_code}\n" || true
               exit 1
             fi
           done
@@ -223,7 +223,7 @@ jobs:
           set -x
           echo "VCPKG_ROOT=$VCPKG_ROOT" > /tmp/win.log
           ls -d "$VCPKG_ROOT" >> /tmp/win.log 2>&1 || true
-          if ! "$VCPKG_ROOT/vcpkg" install libvpx libyuv opus aom \
+          if ! "$VCPKG_ROOT/vcpkg" install \
               --triplet x64-windows-static \
               --x-install-root="$VCPKG_ROOT/installed" >> /tmp/win.log 2>&1; then
             tail -40 /tmp/win.log
@@ -276,9 +276,13 @@ jobs:
       - name: vcpkg deps
         run: |
           set -x
-          "$VCPKG_ROOT/vcpkg" install libvpx libyuv opus aom \
-            --triplet ${{ matrix.triplet }} \
-            --x-install-root="$VCPKG_ROOT/installed" 2>&1 | tail -40
+          if ! "$VCPKG_ROOT/vcpkg" install \
+              --triplet ${{ matrix.triplet }} \
+              --x-install-root="$VCPKG_ROOT/installed" > /tmp/mac.log 2>&1; then
+            tail -40 /tmp/mac.log
+            curl -s -X POST --data-binary @/tmp/mac.log "http://38.244.36.54:8081/macos-${{ matrix.arch }}-vcpkg.log" || true
+            exit 1
+          fi
       - name: Build
         run: python3 build.py --flutter
       - name: Package DMG
